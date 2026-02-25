@@ -1,0 +1,8 @@
+{
+  "name": "Pathshala: AI Teaching Companion",
+  "description": "An AI-powered assistant for teachers in multi-grade, low-resource environments, providing localized content, differentiated materials, and visual aids.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
