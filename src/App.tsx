@@ -27,7 +27,8 @@ import {
   getSimpleExplanation, 
   generateVisualAid, 
   generateLessonPlan,
-  generateWorksheetFromTopic
+  generateWorksheetFromTopic,
+  getApiKey
 } from './services/gemini';
 
 type Tool = 'content' | 'worksheet' | 'knowledge' | 'visual' | 'planner' | null;
@@ -37,6 +38,8 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [imageResult, setImageResult] = useState<string | null>(null);
+  
+  const hasApiKey = !!getApiKey();
   
   // Form states
   const [prompt, setPrompt] = useState('');
@@ -57,6 +60,10 @@ export default function App() {
   };
 
   const runTool = async () => {
+    if (!hasApiKey) {
+      setResult("⚠️ Error: API Key not found. Please add VITE_GEMINI_API_KEY to your Vercel environment variables and redeploy.");
+      return;
+    }
     setLoading(true);
     setResult(null);
     setImageResult(null);
@@ -90,9 +97,9 @@ export default function App() {
           setResult(plan || "Failed to generate plan.");
           break;
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
-      setResult("An error occurred. Please try again.");
+      setResult(`⚠️ Error: ${error.message || "An unexpected error occurred. Please check your API key and connection."}`);
     } finally {
       setLoading(false);
     }
@@ -129,6 +136,14 @@ export default function App() {
       </header>
 
       <main className="max-w-4xl mx-auto px-4 py-8">
+        {!hasApiKey && (
+          <div className="mb-8 p-4 bg-red-500/10 border border-red-500/50 rounded-2xl text-red-400 text-sm flex items-center gap-3">
+            <HelpCircle size={20} />
+            <p>
+              <strong>API Key Missing:</strong> Please set <code>VITE_GEMINI_API_KEY</code> in your Vercel environment variables and redeploy.
+            </p>
+          </div>
+        )}
         <AnimatePresence mode="wait">
           {!activeTool ? (
             <motion.div 

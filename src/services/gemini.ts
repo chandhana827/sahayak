@@ -1,38 +1,40 @@
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 
 // Robust API key retrieval for Vite/Vercel environments
-const getApiKey = () => {
+export const getApiKey = () => {
   try {
     // @ts-ignore
-    if (import.meta.env && import.meta.env.VITE_GEMINI_API_KEY) {
-      // @ts-ignore
-      return import.meta.env.VITE_GEMINI_API_KEY;
-    }
+    const viteKey = import.meta.env?.VITE_GEMINI_API_KEY;
+    if (viteKey && viteKey !== "Your_key") return viteKey;
+    
     // @ts-ignore
-    if (typeof process !== 'undefined' && process.env && process.env.GEMINI_API_KEY) {
-      // @ts-ignore
-      return process.env.GEMINI_API_KEY;
-    }
+    const processKey = typeof process !== 'undefined' ? process.env?.GEMINI_API_KEY : null;
+    if (processKey && processKey !== "Your_key") return processKey;
+
     return "";
   } catch (e) {
     return "";
   }
 };
 
-const apiKey = getApiKey();
-const genAI = new GoogleGenAI({ apiKey });
-
 export const MODELS = {
   PRO: "gemini-3.1-pro-preview",
   FLASH: "gemini-3-flash-preview",
   IMAGE: "gemini-2.5-flash-image",
-  IMAGEN: "imagen-3.0-generate-001",
   AUDIO: "gemini-2.5-flash-native-audio-preview-09-2025",
 };
 
+// Helper to get AI instance with fresh key
+const getAI = () => {
+  const key = getApiKey();
+  if (!key) throw new Error("API Key not found. Please set VITE_GEMINI_API_KEY in your Vercel environment variables.");
+  return new GoogleGenAI({ apiKey: key });
+};
+
 export async function generateLocalizedContent(prompt: string, language: string) {
+  const ai = getAI();
   try {
-    const response = await genAI.models.generateContent({
+    const response = await ai.models.generateContent({
       model: MODELS.FLASH,
       contents: `You are an expert teacher in rural India. Generate content in ${language}. 
       Task: ${prompt}
@@ -46,8 +48,9 @@ export async function generateLocalizedContent(prompt: string, language: string)
 }
 
 export async function differentiateWorksheet(imageData: string, mimeType: string, grades: string[]) {
+  const ai = getAI();
   try {
-    const response = await genAI.models.generateContent({
+    const response = await ai.models.generateContent({
       model: MODELS.FLASH,
       contents: {
         parts: [
@@ -69,8 +72,9 @@ export async function differentiateWorksheet(imageData: string, mimeType: string
 }
 
 export async function getSimpleExplanation(question: string, language: string) {
+  const ai = getAI();
   try {
-    const response = await genAI.models.generateContent({
+    const response = await ai.models.generateContent({
       model: MODELS.FLASH,
       contents: `Explain this to a 7-year-old in ${language}: "${question}". 
       Use a simple analogy related to daily life in rural India. Keep it brief and encouraging.`,
@@ -83,51 +87,41 @@ export async function getSimpleExplanation(question: string, language: string) {
 }
 
 export async function generateVisualAid(description: string) {
+  const ai = getAI();
   try {
-    // Using generateImages with Imagen 3.0 for better reliability in production
-    const response = await genAI.models.generateImages({
-      model: MODELS.IMAGEN,
-      prompt: `A simple, clear line drawing or diagram of: ${description}. 
-      The drawing should be easy for a teacher to replicate on a blackboard with white chalk. 
-      Minimal detail, high contrast, educational focus, white lines on dark background style.`,
-      config: {
-        numberOfImages: 1,
-        aspectRatio: "1:1",
+    // Using gemini-2.5-flash-image for blackboard-style drawings
+    const response = await ai.models.generateContent({
+      model: MODELS.IMAGE,
+      contents: {
+        parts: [{ 
+          text: `A very simple, clear line drawing of: ${description}. 
+          Style: White chalk lines on a plain black background. 
+          Focus: Educational diagram, easy to copy by hand, high contrast, no shading.` 
+        }]
       }
     });
 
-    if (response.generatedImages && response.generatedImages.length > 0) {
-      const base64Data = response.generatedImages[0].image.imageBytes;
-      return `data:image/png;base64,${base64Data}`;
+    const candidate = response.candidates?.[0];
+    if (!candidate) throw new Error("No response from AI model.");
+
+    for (const part of candidate.content.parts) {
+      if (part.inlineData) {
+        return `data:image/png;base64,${part.inlineData.data}`;
+      }
     }
     
-    throw new Error("No image generated in response");
-  } catch (error) {
+    throw new Error("The model did not return an image. It might be a safety filter or model limitation.");
+  } catch (error: any) {
     console.error("Visual Aid Error:", error);
-    // Fallback to gemini-2.5-flash-image if Imagen fails
-    try {
-      const fallbackResponse = await genAI.models.generateContent({
-        model: MODELS.IMAGE,
-        contents: {
-          parts: [{ text: `A simple line drawing of: ${description}` }]
-        }
-      });
-      
-      for (const part of fallbackResponse.candidates?.[0]?.content?.parts || []) {
-        if (part.inlineData) {
-          return `data:image/png;base64,${part.inlineData.data}`;
-        }
-      }
-    } catch (fallbackError) {
-      console.error("Visual Aid Fallback Error:", fallbackError);
-    }
-    throw error;
+    const message = error?.message || "Unknown error";
+    throw new Error(`Visual Aid Error: ${message}`);
   }
 }
 
 export async function generateWorksheetFromTopic(topic: string, grades: string[], language: string = "English") {
+  const ai = getAI();
   try {
-    const response = await genAI.models.generateContent({
+    const response = await ai.models.generateContent({
       model: MODELS.FLASH,
       contents: `Create a comprehensive and simple worksheet for the topic: "${topic}" for the following grades: ${grades.join(", ")}. 
       The worksheet should be in ${language}.
@@ -142,16 +136,18 @@ export async function generateWorksheetFromTopic(topic: string, grades: string[]
       Format the output clearly using Markdown with bold headings and structured lists.`,
     });
     return response.text;
-  } catch (error) {
+  } catch (error: any) {
     console.error("Topic Worksheet Error:", error);
-    throw error;
+    throw new Error(`Worksheet Error: ${error?.message || "Unknown error"}`);
   }
 }
 
 export async function generateLessonPlan(topic: string, grades: string[], duration: string) {
+  const ai = getAI();
   try {
-    const response = await genAI.models.generateContent({
-      model: MODELS.PRO,
+    // Switching to FLASH for better reliability in production
+    const response = await ai.models.generateContent({
+      model: MODELS.FLASH,
       contents: `Create a weekly lesson plan for a multi-grade classroom (Grades: ${grades.join(", ")}).
       Topic: ${topic}
       Duration: ${duration}
@@ -163,8 +159,8 @@ export async function generateLessonPlan(topic: string, grades: string[], durati
       Format as a structured table or clear list in Markdown.`,
     });
     return response.text;
-  } catch (error) {
+  } catch (error: any) {
     console.error("Lesson Plan Error:", error);
-    throw error;
+    throw new Error(`Lesson Plan Error: ${error?.message || "Unknown error"}`);
   }
 }
