@@ -4,7 +4,16 @@ import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 const getApiKey = () => {
   try {
     // @ts-ignore
-    return import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "";
+    if (import.meta.env && import.meta.env.VITE_GEMINI_API_KEY) {
+      // @ts-ignore
+      return import.meta.env.VITE_GEMINI_API_KEY;
+    }
+    // @ts-ignore
+    if (typeof process !== 'undefined' && process.env && process.env.GEMINI_API_KEY) {
+      // @ts-ignore
+      return process.env.GEMINI_API_KEY;
+    }
+    return "";
   } catch (e) {
     return "";
   }
@@ -17,6 +26,7 @@ export const MODELS = {
   PRO: "gemini-3.1-pro-preview",
   FLASH: "gemini-3-flash-preview",
   IMAGE: "gemini-2.5-flash-image",
+  IMAGEN: "imagen-3.0-generate-001",
   AUDIO: "gemini-2.5-flash-native-audio-preview-09-2025",
 };
 
@@ -37,7 +47,6 @@ export async function generateLocalizedContent(prompt: string, language: string)
 
 export async function differentiateWorksheet(imageData: string, mimeType: string, grades: string[]) {
   try {
-    // Using FLASH for vision as it's very reliable and fast
     const response = await genAI.models.generateContent({
       model: MODELS.FLASH,
       contents: {
@@ -75,37 +84,49 @@ export async function getSimpleExplanation(question: string, language: string) {
 
 export async function generateVisualAid(description: string) {
   try {
-    const response = await genAI.models.generateContent({
-      model: MODELS.IMAGE,
-      contents: {
-        parts: [{ text: `A simple, clear line drawing or diagram of: ${description}. 
-        The drawing should be easy for a teacher to replicate on a blackboard with white chalk. 
-        Minimal detail, high contrast, educational focus.` }]
-      },
+    // Using generateImages with Imagen 3.0 for better reliability in production
+    const response = await genAI.models.generateImages({
+      model: MODELS.IMAGEN,
+      prompt: `A simple, clear line drawing or diagram of: ${description}. 
+      The drawing should be easy for a teacher to replicate on a blackboard with white chalk. 
+      Minimal detail, high contrast, educational focus, white lines on dark background style.`,
       config: {
-        imageConfig: { aspectRatio: "1:1" }
+        numberOfImages: 1,
+        aspectRatio: "1:1",
       }
     });
 
-    if (!response.candidates?.[0]?.content?.parts) {
-      throw new Error("No image generated in response");
+    if (response.generatedImages && response.generatedImages.length > 0) {
+      const base64Data = response.generatedImages[0].image.imageBytes;
+      return `data:image/png;base64,${base64Data}`;
     }
-
-    for (const part of response.candidates[0].content.parts) {
-      if (part.inlineData) {
-        return `data:image/png;base64,${part.inlineData.data}`;
-      }
-    }
-    throw new Error("No image data found in response parts");
+    
+    throw new Error("No image generated in response");
   } catch (error) {
     console.error("Visual Aid Error:", error);
+    // Fallback to gemini-2.5-flash-image if Imagen fails
+    try {
+      const fallbackResponse = await genAI.models.generateContent({
+        model: MODELS.IMAGE,
+        contents: {
+          parts: [{ text: `A simple line drawing of: ${description}` }]
+        }
+      });
+      
+      for (const part of fallbackResponse.candidates?.[0]?.content?.parts || []) {
+        if (part.inlineData) {
+          return `data:image/png;base64,${part.inlineData.data}`;
+        }
+      }
+    } catch (fallbackError) {
+      console.error("Visual Aid Fallback Error:", fallbackError);
+    }
     throw error;
   }
 }
 
 export async function generateWorksheetFromTopic(topic: string, grades: string[], language: string = "English") {
   try {
-    // Using FLASH for topic-based worksheets for speed and reliability
     const response = await genAI.models.generateContent({
       model: MODELS.FLASH,
       contents: `Create a comprehensive and simple worksheet for the topic: "${topic}" for the following grades: ${grades.join(", ")}. 
