@@ -8,7 +8,8 @@ import {
   BookOpen, 
   Camera, 
   HelpCircle, 
-  Image as ImageIcon, 
+  Mic,
+  Square,
   Calendar, 
   Languages, 
   ChevronRight, 
@@ -25,13 +26,13 @@ import {
   generateLocalizedContent, 
   differentiateWorksheet, 
   getSimpleExplanation, 
-  generateVisualAid, 
+  analyzeReading, 
   generateLessonPlan,
   generateWorksheetFromTopic,
   getApiKey
 } from './services/gemini';
 
-type Tool = 'content' | 'worksheet' | 'knowledge' | 'visual' | 'planner' | null;
+type Tool = 'content' | 'worksheet' | 'knowledge' | 'reading' | 'planner' | null;
 
 export default function App() {
   const [activeTool, setActiveTool] = useState<Tool>(null);
@@ -46,7 +47,39 @@ export default function App() {
   const [language, setLanguage] = useState('Hindi');
   const [grades, setGrades] = useState<string[]>(['Grade 1', 'Grade 2']);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      const chunks: BlobPart[] = [];
+
+      mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
+      mediaRecorder.onstop = () => {
+        const blob = new Blob(chunks, { type: 'audio/webm' });
+        setAudioBlob(blob);
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch (err) {
+      console.error("Error accessing microphone:", err);
+      setResult("⚠️ Error: Could not access microphone. Please check permissions.");
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+    }
+  };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -88,9 +121,18 @@ export default function App() {
           const explanation = await getSimpleExplanation(prompt, language);
           setResult(explanation || "Failed to get explanation.");
           break;
-        case 'visual':
-          const visual = await generateVisualAid(prompt);
-          setImageResult(visual);
+        case 'reading':
+          if (audioBlob) {
+            const reader = new FileReader();
+            reader.readAsDataURL(audioBlob);
+            reader.onloadend = async () => {
+              const base64Data = (reader.result as string).split(',')[1];
+              const analysis = await analyzeReading(base64Data, 'audio/webm');
+              setResult(analysis || "Failed to analyze reading.");
+              setLoading(false);
+            };
+            return; // Exit early as we handle loading in onloadend
+          }
           break;
         case 'planner':
           const plan = await generateLessonPlan(prompt, grades, "1 Week");
@@ -99,9 +141,17 @@ export default function App() {
       }
     } catch (error: any) {
       console.error(error);
-      setResult(`⚠️ Error: ${error.message || "An unexpected error occurred. Please check your API key and connection."}`);
+      let errorMessage = error.message || "An unexpected error occurred.";
+      
+      if (errorMessage.includes("429") || errorMessage.includes("RESOURCE_EXHAUSTED")) {
+        errorMessage = "🚀 Quota Reached: You've reached the limit for the free tier. Please wait a few minutes or try again tomorrow.";
+      } else if (errorMessage.includes("API Key not found")) {
+        errorMessage = "🔑 API Key Missing: Please check your Vercel Environment Variables.";
+      }
+
+      setResult(`⚠️ ${errorMessage}`);
     } finally {
-      setLoading(false);
+      if (activeTool !== 'reading') setLoading(false);
     }
   };
 
@@ -109,7 +159,7 @@ export default function App() {
     { id: 'content', name: 'Hyper-Local Content', icon: Languages, color: 'bg-orange-500/10 text-orange-400', desc: 'Stories & lessons in local languages' },
     { id: 'worksheet', name: 'Worksheet Maker', icon: Camera, color: 'bg-blue-500/10 text-blue-400', desc: 'Create worksheets from topics or photos' },
     { id: 'knowledge', name: 'Instant Knowledge', icon: HelpCircle, color: 'bg-emerald-500/10 text-emerald-400', desc: 'Simple answers for student questions' },
-    { id: 'visual', name: 'Visual Aid Designer', icon: ImageIcon, color: 'bg-purple-500/10 text-purple-400', desc: 'Simple drawings for the blackboard' },
+    { id: 'reading', name: 'Reading Assessment', icon: Mic, color: 'bg-purple-500/10 text-purple-400', desc: 'Analyze student reading fluency via audio' },
     { id: 'planner', name: 'Lesson Planner', icon: Calendar, color: 'bg-rose-500/10 text-rose-400', desc: 'Weekly plans for multi-grade classes' },
   ];
 
@@ -219,10 +269,10 @@ export default function App() {
 
                 <div className="space-y-6">
                   {/* Common Inputs */}
-                  {(activeTool === 'content' || activeTool === 'knowledge' || activeTool === 'visual' || activeTool === 'planner' || activeTool === 'worksheet') && (
+                  {(activeTool === 'content' || activeTool === 'knowledge' || activeTool === 'planner' || activeTool === 'worksheet') && (
                     <div className="space-y-2">
                       <label className="text-xs font-bold uppercase tracking-widest text-stone-500">
-                        {activeTool === 'visual' ? 'Describe the drawing' : activeTool === 'planner' ? 'Topic' : activeTool === 'worksheet' ? 'Topic Name (e.g., Photosynthesis)' : 'Your Request'}
+                        {activeTool === 'planner' ? 'Topic' : activeTool === 'worksheet' ? 'Topic Name (e.g., Photosynthesis)' : 'Your Request'}
                       </label>
                       <textarea 
                         value={prompt}
@@ -230,12 +280,51 @@ export default function App() {
                         placeholder={
                           activeTool === 'content' ? "e.g., A story about a brave farmer in Maharashtra..." :
                           activeTool === 'knowledge' ? "e.g., Why is the sky blue?" :
-                          activeTool === 'visual' ? "e.g., The water cycle showing evaporation and rain..." :
                           activeTool === 'worksheet' ? "Enter topic name for MCQs, Fill in blanks, etc." :
                           "e.g., Solar System"
                         }
                         className="w-full p-4 bg-[#252525] border border-stone-800 text-white rounded-2xl focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 outline-none transition-all min-h-[120px]"
                       />
+                    </div>
+                  )}
+
+                  {activeTool === 'reading' && (
+                    <div className="space-y-4">
+                      <label className="text-xs font-bold uppercase tracking-widest text-stone-500">Record Student Reading</label>
+                      <div className="flex flex-col items-center gap-6 p-8 bg-[#252525] border border-stone-800 rounded-3xl">
+                        <div className={cn(
+                          "w-20 h-20 rounded-full flex items-center justify-center transition-all duration-500",
+                          isRecording ? "bg-red-500 animate-pulse scale-110 shadow-lg shadow-red-500/20" : "bg-stone-800"
+                        )}>
+                          <Mic size={32} className={isRecording ? "text-white" : "text-stone-500"} />
+                        </div>
+                        
+                        <div className="flex gap-4">
+                          {!isRecording ? (
+                            <button 
+                              onClick={startRecording}
+                              className="px-6 py-2 bg-orange-500 text-white rounded-full font-bold hover:bg-orange-600 transition-colors"
+                            >
+                              Start Recording
+                            </button>
+                          ) : (
+                            <button 
+                              onClick={stopRecording}
+                              className="px-6 py-2 bg-red-500 text-white rounded-full font-bold hover:bg-red-600 transition-colors flex items-center gap-2"
+                            >
+                              <Square size={16} />
+                              Stop Recording
+                            </button>
+                          )}
+                        </div>
+
+                        {audioBlob && !isRecording && (
+                          <div className="w-full space-y-2">
+                            <p className="text-xs text-center text-stone-500 uppercase tracking-widest">Recording Preview</p>
+                            <audio src={URL.createObjectURL(audioBlob)} controls className="w-full" />
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
 
@@ -313,7 +402,7 @@ export default function App() {
 
                   <button 
                     onClick={runTool}
-                    disabled={loading || (!prompt && !selectedImage)}
+                    disabled={loading || (activeTool !== 'reading' && !prompt && !selectedImage) || (activeTool === 'reading' && !audioBlob)}
                     className="w-full py-4 bg-orange-500 text-white rounded-2xl font-bold text-lg shadow-lg shadow-orange-500/20 hover:bg-orange-600 active:scale-[0.98] transition-all disabled:opacity-50 disabled:pointer-events-none flex items-center justify-center gap-2"
                   >
                     {loading ? (

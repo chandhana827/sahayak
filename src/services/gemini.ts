@@ -86,35 +86,26 @@ export async function getSimpleExplanation(question: string, language: string) {
   }
 }
 
-export async function generateVisualAid(description: string) {
+export async function analyzeReading(audioData: string, mimeType: string) {
   const ai = getAI();
   try {
-    // Using gemini-2.5-flash-image for blackboard-style drawings
     const response = await ai.models.generateContent({
-      model: MODELS.IMAGE,
+      model: MODELS.FLASH,
       contents: {
-        parts: [{ 
-          text: `A very simple, clear line drawing of: ${description}. 
-          Style: White chalk lines on a plain black background. 
-          Focus: Educational diagram, easy to copy by hand, high contrast, no shading.` 
-        }]
-      }
+        parts: [
+          { inlineData: { data: audioData, mimeType } },
+          { text: `Analyze this student's reading recording. 
+          1. Provide a fluency score (1-10).
+          2. Identify 3-5 specific words they struggled with.
+          3. Give 2 simple tips for the teacher to help this student improve.
+          Format the output clearly using Markdown.` }
+        ]
+      },
     });
-
-    const candidate = response.candidates?.[0];
-    if (!candidate) throw new Error("No response from AI model.");
-
-    for (const part of candidate.content.parts) {
-      if (part.inlineData) {
-        return `data:image/png;base64,${part.inlineData.data}`;
-      }
-    }
-    
-    throw new Error("The model did not return an image. It might be a safety filter or model limitation.");
+    return response.text;
   } catch (error: any) {
-    console.error("Visual Aid Error:", error);
-    const message = error?.message || "Unknown error";
-    throw new Error(`Visual Aid Error: ${message}`);
+    console.error("Reading Analysis Error:", error);
+    throw new Error(`Reading Analysis Error: ${error?.message || "Unknown error"}`);
   }
 }
 
